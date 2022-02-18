@@ -1,0 +1,354 @@
+import argparse
+import pickle
+import os
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import re
+from collections import defaultdict, OrderedDict
+
+from scipy.stats import ttest_ind
+from alfred.utils.directory_tree import DirectoryTree, get_root
+from alfred.utils.misc import select_storage_dirs, robust_seed_aggregate
+from alfred.utils.plots import create_fig, bar_chart
+from alfred.utils.config import load_dict_from_json
+from alfred.utils.recorder import Recorder
+
+from main_comem.main import POSSIBLE_GOALS
+
+
+def get_make_plots_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--from_file', type=str, default=None)
+    parser.add_argument('--storage_name', type=str, default=None)
+    parser.add_argument('--data_pickle_file_name', type=str, default='seed_success_rates.pkl')
+    parser.add_argument('--root_dir', default=None, type=str)
+    parser.add_argument('--config_filter', default=None, type=eval)
+    parser.add_argument('--baseline_experiment_dir', type=str)
+    return parser.parse_args()
+
+
+def gather_seed_scores(storage_dirs, config_filter, data_pickle_file_name):
+    seed_scores = OrderedDict()
+
+    experiment_dirs_that_matches_filter = []
+    for storage_dir in storage_dirs:
+        experiment_dirs = DirectoryTree.get_all_experiments(storage_dir)
+        for experiment_dir in experiment_dirs:
+            seed_dirs = DirectoryTree.get_all_seeds(experiment_dir)
+            expe_config = load_dict_from_json(seed_dirs[0] / 'config.json')
+
+            if passes_filter(expe_config, config_filter):
+                experiment_dirs_that_matches_filter.append(experiment_dir)
+            else:
+                continue
+
+            del expe_config['seed']
+            seed_scores[str(expe_config)] = []
+            for seed_dir in seed_dirs:
+                with open(seed_dir / 'analysis' / data_pickle_file_name, 'rb') as fh:
+                    seed_scores[str(expe_config)].append(pickle.load(fh))
+                    fh.close()
+
+    return seed_scores, experiment_dirs_that_matches_filter
+
+
+def passes_filter(config, config_filter):
+    if config_filter is None:
+        return True
+    else:
+        return all([v == config[k] for k, v in config_filter.items()])
+
+
+def sem(x):
+    return np.std(x) / (len(x) ** 0.5)
+
+
+def aggregate_seed_scores(seed_scores):
+    expes_dict_of_scores = OrderedDict()
+    for expe, list_of_dict_seed_scores in seed_scores.items():
+        dict_of_scores_accross_seeds = {}
+        for eval_config in list_of_dict_seed_scores[0].keys():
+            dict_of_scores_accross_seeds[eval_config] = []
+            for seed in list_of_dict_seed_scores:
+                dict_of_scores_accross_seeds[eval_config].append(seed[eval_config])
+
+        expe_dict_of_scores = OrderedDict(
+            {k: {'mean': np.mean(v), 'sem': sem(v), 'all_val': v} for k, v in dict_of_scores_accross_seeds.items()})
+
+        expes_dict_of_scores[expe] = expe_dict_of_scores
+
+    return expes_dict_of_scores
+
+
+def make_inner_keys_outer_keys(dict_of_dicts):
+    old_outer_keys = list(dict_of_dicts.keys())
+    old_inner_keys = list(dict_of_dicts[old_outer_keys[0]].keys())
+
+    new_dict_of_dicts = OrderedDict({k: OrderedDict() for k in old_inner_keys})
+
+    for old_out_k in old_outer_keys:
+        for old_in_k in old_inner_keys:
+            new_dict_of_dicts[old_in_k][old_out_k] = dict_of_dicts[old_out_k][old_in_k].copy()
+
+    return new_dict_of_dicts
+
+
+GOAL_DICT = {'grasp_object': 'grasp',
+             'place_object': 'place',
+             'horizontal_line': 'H-line',
+             'vertical_line': 'V-line',
+             'mixed': 'all-goals'}
+
+
+def extract_train_goal(s):
+    if "'builder_type': 'random'" in s:
+        return 'random'
+
+    if "'builder_type': 'saved_from_other_seed_dir'" in s:
+        return 'no-goal'
+
+    if "'builder_type': 'saved_initial'" in s:
+        if "'make_builder_deterministic': False" in s:
+            return 'stochastic'
+        elif "'make_builder_deterministic': True":
+            return 'deterministic'
+
+    assert 'bw_init_goal' in s
+
+    if "'change_goal': True" in s:
+        return GOAL_DICT['mixed']
+    for g in POSSIBLE_GOALS:
+        if g in s:
+            return GOAL_DICT[g]
+
+    raise ValueError
+
+
+def extract_eval_goal(s):
+    if 'goal_override' in s:
+        for g in POSSIBLE_GOALS:
+            if g in s:
+                return GOAL_DICT[g]
+    elif 'architect_type' in s:
+        assert 'random' in s
+        return 'random_archi'
+
+    else:
+        raise ValueError
+
+
+def get_baseline_scores_and_aggregate(baseline_experiment_dir, root_dir):
+    baseline_experiment_dir = get_root(root_dir) / baseline_experiment_dir
+    seed_dirs = DirectoryTree.get_all_seeds(baseline_experiment_dir)
+    seed_baseline_scores = OrderedDict()
+    for seed_dir in seed_dirs:
+        baseline_dirs = [x for x in (seed_dir / 'baselines').iterdir() if x.is_dir()]
+        for baseline_dir in baseline_dirs:
+            with open(baseline_dir / 'seed_baseline_success_rates.pkl', 'rb') as fh:
+                seed_score_dict = pickle.load(fh)
+                fh.close()
+
+            if baseline_dir.name in seed_baseline_scores:
+                for k, v in seed_score_dict.items():
+                    seed_baseline_scores[baseline_dir.name][k].append(v)
+            else:
+                seed_baseline_scores[baseline_dir.name] = OrderedDict({k: [v] for k, v in seed_score_dict.items()})
+
+    baseline_aggregated_scores = OrderedDict()
+    for baseline, scores_dict in seed_baseline_scores.items():
+        baseline_aggregated_scores[baseline] = OrderedDict(
+            {eval_key: {'mean': np.mean(eval_scores), 'sem': sem(eval_scores), 'all_val': eval_scores}
+             for eval_key, eval_scores in scores_dict.items()})
+
+    return baseline_aggregated_scores
+
+
+def compute_p_val_t_test(ref, all_val_dict):
+    val_ref_dict = all_val_dict[ref]
+    p_val_dict = {}
+    for k, v in all_val_dict.items():
+        if k != ref:
+            p_val_dict[k] = dict()
+            for kk, vv in v.items():
+                p_val_dict[k][kk] = ttest_ind(vv, val_ref_dict[kk], equal_var=False)[1]
+    return OrderedDict(p_val_dict)
+
+
+def clean_keys(dict_of_dicts):
+    new_dict_of_dicts = OrderedDict(
+        {extract_train_goal(out_k): OrderedDict({extract_eval_goal(in_k): in_v for in_k, in_v in out_v.items()})
+         for out_k, out_v in dict_of_dicts.items()})
+    return new_dict_of_dicts
+
+
+if __name__ == "__main__":
+    args = get_make_plots_args()
+
+    ## METHODS Perfo-bars #####################################
+
+    storage_dirs = select_storage_dirs(args.from_file, args.storage_name, args.root_dir)
+    seed_scores, experiment_dirs = gather_seed_scores(storage_dirs, args.config_filter, args.data_pickle_file_name)
+    expes_dict_of_scores = aggregate_seed_scores(seed_scores)
+
+    expes_dict_of_scores.update(get_baseline_scores_and_aggregate(args.baseline_experiment_dir, args.root_dir))
+
+    expes_dict_of_scores = clean_keys(expes_dict_of_scores)
+
+    for key in ['stochastic', 'deterministic', 'all-goals']:
+        del expes_dict_of_scores[key]
+
+    temp_dict = OrderedDict()
+    for train_method in expes_dict_of_scores.keys():
+        if train_method in list(GOAL_DICT.values()):
+            temp_dict[train_method] = expes_dict_of_scores[train_method][train_method]
+        else:
+            del expes_dict_of_scores[train_method]['random_archi']
+
+    new_expe_dict_score = OrderedDict()
+    new_expe_dict_score['ABIG'] = temp_dict
+    new_expe_dict_score['ABIG-no-intent'] = expes_dict_of_scores['no-goal']
+    new_expe_dict_score['random'] = expes_dict_of_scores['random']
+    expes_dict_of_scores = new_expe_dict_score
+
+    n_bars_per_group = len(expes_dict_of_scores.keys())
+    group_names = list(expes_dict_of_scores.values())[0].keys()
+    n_groups = len(group_names)
+    # fsize = (n_bars_per_group * n_groups, n_groups)
+    fsize=(15,5)
+    fig, ax = create_fig((1, 1), figsize=fsize)
+
+    scores_mean = OrderedDict({out_k: OrderedDict({in_k: val_in['mean'] for in_k, val_in in val_out.items()})
+                               for out_k, val_out in expes_dict_of_scores.items()})
+    scores_err_up = OrderedDict({out_k: OrderedDict({in_k: val_in['sem'] for in_k, val_in in val_out.items()})
+                                 for out_k, val_out in expes_dict_of_scores.items()})
+    scores_err_down = scores_err_up
+
+    all_vals = OrderedDict({out_k: OrderedDict({in_k: val_in['all_val'] for in_k, val_in in val_out.items()})
+                            for out_k, val_out in expes_dict_of_scores.items()})
+
+    p_vals = compute_p_val_t_test('ABIG', all_vals)
+
+
+    bar_width = bar_chart(ax,
+                          scores=scores_mean,
+                          err_up=scores_err_up,
+                          err_down=scores_err_down,
+                          p_values=p_vals,
+                          group_names=group_names,
+                          ylabel="Mean score (10 seeds)",
+                          xlabel="Goal",
+                          legend_title="Method",
+                          fontsize=15.,
+                          fontratio=1.2,
+                          legend_pos=(0.5, 1.5),
+                          make_y_ticks=True,
+                          y_ticks=[0., 0.2, 0.4, 0.6, 0.8, 1]
+                          )
+
+    plt.tight_layout()
+    for expe_dir in experiment_dirs:
+        os.makedirs(expe_dir / 'ood_performance', exist_ok=True)
+        fig.savefig(expe_dir / 'ood_performance' / f'performance_methods_{args.config_filter}.png', bbox_inches='tight')
+
+    ## TRANSFERT ###############################################
+
+    storage_dirs = select_storage_dirs(args.from_file, args.storage_name, args.root_dir)
+    seed_scores, experiment_dirs = gather_seed_scores(storage_dirs, args.config_filter, args.data_pickle_file_name)
+    expes_dict_of_scores = aggregate_seed_scores(seed_scores)
+
+    expes_dict_of_scores = clean_keys(expes_dict_of_scores)
+
+    temp = expes_dict_of_scores['all-goals']
+    del expes_dict_of_scores['all-goals']
+    expes_dict_of_scores['all-goals'] = temp
+
+    expes_dict_of_scores = make_inner_keys_outer_keys(expes_dict_of_scores)
+    del expes_dict_of_scores['random_archi']
+
+    n_bars_per_group = len(expes_dict_of_scores.keys())
+    group_names = list(expes_dict_of_scores.values())[0].keys()
+    n_groups = len(group_names)
+    fig, ax = create_fig((1, 1), figsize=(15,5))
+
+    scores_mean = OrderedDict({out_k: OrderedDict({in_k: val_in['mean'] for in_k, val_in in val_out.items()})
+                               for out_k, val_out in expes_dict_of_scores.items()})
+    scores_err_up = OrderedDict({out_k: OrderedDict({in_k: val_in['sem'] for in_k, val_in in val_out.items()})
+                                 for out_k, val_out in expes_dict_of_scores.items()})
+    scores_err_down = scores_err_up
+    colors = {'grasp':'#1E77B4', 'place':'#5196C6', 'H-line':'#84B6D7', 'V-line':'#B7D5E9'}
+    bar_chart(ax,
+              scores=scores_mean,
+              err_up=scores_err_up,
+              err_down=scores_err_down,
+              colors=colors,
+              group_names=group_names,
+              ylabel="Mean score (10 seeds)",
+              xlabel="Training Goal",
+              legend_title="Testing Goal",
+              fontsize=15.,
+              fontratio=1.2,
+              legend_pos=(0.5, 1.5),
+              make_y_ticks=True,
+              y_ticks=[0., 0.2, 0.4, 0.6, 0.8, 1.],
+              cmap="tab20b"
+              )
+
+    plt.tight_layout()
+    for expe_dir in experiment_dirs:
+        os.makedirs(expe_dir / 'ood_performance', exist_ok=True)
+        fig.savefig(expe_dir / 'ood_performance' / f'transfer_perfos_{args.config_filter}.png', bbox_inches='tight')
+
+    ## Baselines ##############################################
+
+    expes_dict_of_scores = get_baseline_scores_and_aggregate(args.baseline_experiment_dir, args.root_dir)
+    expes_dict_of_scores = clean_keys(expes_dict_of_scores)
+    new_expe_dict_score = OrderedDict()
+    new_expe_dict_score['ABIG-no-intent'] = expes_dict_of_scores['no-goal']
+    new_expe_dict_score['random'] = expes_dict_of_scores['random']
+    new_expe_dict_score['stochastic'] = expes_dict_of_scores['stochastic']
+    new_expe_dict_score['deterministic'] = expes_dict_of_scores['deterministic']
+    expes_dict_of_scores = new_expe_dict_score
+    expes_dict_of_scores = make_inner_keys_outer_keys(expes_dict_of_scores)
+    del expes_dict_of_scores['random_archi']
+    expes_dict_of_scores = make_inner_keys_outer_keys(expes_dict_of_scores)
+
+    n_bars_per_group = len(expes_dict_of_scores.keys())
+    group_names = list(expes_dict_of_scores.values())[0].keys()
+    n_groups = len(group_names)
+    fig, ax = create_fig((1, 1), figsize=(15,5))
+
+    scores_mean = OrderedDict({out_k: OrderedDict({in_k: val_in['mean'] for in_k, val_in in val_out.items()})
+                               for out_k, val_out in expes_dict_of_scores.items()})
+    scores_err_up = OrderedDict({out_k: OrderedDict({in_k: val_in['sem'] for in_k, val_in in val_out.items()})
+                                 for out_k, val_out in expes_dict_of_scores.items()})
+
+    scores_err_down = scores_err_up
+
+    cm = plt.cm.get_cmap("tab10")
+    colors = {alg_name: np.array(cm(i + 1)) for i, alg_name in enumerate(scores_mean.keys())}
+
+    bar_chart(ax,
+              scores=scores_mean,
+              err_up=scores_err_up,
+              err_down=scores_err_down,
+              group_names=group_names,
+              ylabel="Mean score (10 seeds)",
+              xlabel="Goal",
+              legend_title="Method",
+              fontsize=15.,
+              fontratio=1.2,
+              legend_pos=(0.5, 1.5),
+              make_y_ticks=True,
+              y_ticks=[0., 0.2, 0.4, 0.6, 0.8, 1.],
+              colors=colors
+              )
+
+    plt.tight_layout()
+
+    baseline_ref_dir = get_root(args.root_dir) / args.baseline_experiment_dir
+    os.makedirs(baseline_ref_dir / 'ood_performance', exist_ok=True)
+    fig.savefig(baseline_ref_dir / 'ood_performance' / f'performance_baselines_{args.config_filter}.png',
+                bbox_inches='tight')
