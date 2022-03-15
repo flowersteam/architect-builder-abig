@@ -91,8 +91,7 @@ Plot the results
 python utils/make_analyse_OOD.plot --from_file schedules/bw_task4_bc_6b/grid_schedule_task_4.py
 ```
 
-<<<<<<< HEAD
-=======
+
 ### Citation
 
 ```
@@ -105,4 +104,3 @@ python utils/make_analyse_OOD.plot --from_file schedules/bw_task4_bc_6b/grid_sch
   url={https://openreview.net/forum?id=swiyAeGzFhQ}
 }
 ```
->>>>>>> df984018caf5958fde8bef422bffe2f0beb1bc35
