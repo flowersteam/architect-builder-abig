@@ -1,0 +1,5 @@
+**.egg**
+**__pycache__**
+storage
+**.DS_Store**
+plots
