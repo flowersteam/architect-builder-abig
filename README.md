@@ -2,7 +2,7 @@
 
 ## Prerequisites and Installation
 
-This code base uses `aflred` for experiment management. The code for the environment is hosted on a separated repo: `architect-builder-env`.
+This codebase uses `aflred` for experiment management. The code for the environment is hosted on a separated repo: `architect-builder-env`.
 To run experiments you need to make a new directory and clone the `architect-builder-abig` repo in it as well as the `alfred` and `architect-builder-env` repos. 
 ```
 mkdir abp
