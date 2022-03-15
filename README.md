@@ -1,7 +1,16 @@
 # Code for Learning to Guide and to Be Guided in the Architect-Builder Problem
 
 
-## Prerequisites and Installation
+## Prerequisites
+
+- nop
+- wandb (likely to have some login/setting up to do here)
+- jax
+- jaxlib
+- pytorch
+- readchar
+
+## Installation
 
 This codebase uses `aflred` for experiment management. The code for the environment is hosted on a separated repo: `architect-builder-env`.
 To run experiments you need to make a new directory and clone the `architect-builder-abig` repo in it as well as the `alfred` and `architect-builder-env` repos. 
