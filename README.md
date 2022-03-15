@@ -1,9 +1,25 @@
 # Code for Learning to Guide and to Be Guided in the Architect-Builder Problem
 
+## Prerequisites and Installation
 
-
-## Prerequisites
-Install `alfred`, `env_comem` and `main_comem` by going into the corresponding folders and following the dedicate `README.md` files.
+This code base uses `aflred` for experiment management. The code for the environment is hosted on a separated repo: `architect-builder-env`.
+To run experiments you need to make a new directory and clone the `architect-builder-abig` repo in it as well as the `alfred` and `architect-builder-env` repos. 
+```
+mkdir abp
+cd abp
+git clone git@github.com:flowersteam/architect-builder-abig.git
+git clone --branch abig-iclr2022 git@github.com:PBarde/alfred.git
+git clone git@github.com:flowersteam/architect-builder-env.git
+```
+Then you need to install them using the following commands.
+```
+cd alfred
+pip install -e .
+cd ../architect-builder-env
+pip install -e .
+cd ../architect-builder-abig
+pip install -e .
+```
 
 To make using alfred as seamless as possible, add the followings to your `.bachrc`:
 ```
@@ -17,10 +33,7 @@ alias alsync='python -m alfred.sync_wandb'
 alias alcopy='python -m alfred.copy_config'
 alias alupdate='python -m alfred.update_config_unique'
 ```
-## Short description
-* `alfred` is used to manage experiments.
-* `env_comem` contains the code for BuildWorld.
-* `main_comem` contains the code for the algorithms (ABIG).
+
 
 ## Running the experiments
 
