@@ -1,7 +1,7 @@
 # Code for Learning to Guide and to Be Guided in the Architect-Builder Problem
 
 
-## Prerequisites
+## Requirements
 
 - nop
 - wandb (likely to have some login/setting up to do here)
