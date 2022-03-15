@@ -68,3 +68,15 @@ Plot the results
 python utils/make_analyse_OOD.plot --from_file schedules/bw_task4_bc_6b/grid_schedule_task_4.py
 ```
 
+### Citation
+
+```
+@inproceedings{
+  barde2022learning,
+  title={Learning to Guide and to be Guided in the Architect-Builder Problem},
+  author={Paul Barde and Tristan Karch and Derek Nowrouzezahrai and Cl{\'e}ment Moulin-Frier and Christopher Pal and Pierre-Yves Oudeyer},
+  booktitle={International Conference on Learning Representations},
+  year={2022},
+  url={https://openreview.net/forum?id=swiyAeGzFhQ}
+}
+```
