@@ -90,7 +90,9 @@ Plot the results
 ```
 python utils/make_analyse_OOD.plot --from_file schedules/bw_task4_bc_6b/grid_schedule_task_4.py
 ```
+## License
 
+The project is licensed under the MIT license.
 
 ### Citation
 
